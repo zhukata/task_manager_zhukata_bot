@@ -2,7 +2,9 @@ from aiogram import F, Router, types
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from task_manager_zhukata_bot.database.orm_query import orm_add_product, orm_get_products
 from task_manager_zhukata_bot.filters.chat_types import ChatTypeFilter, IsAdmin
 from task_manager_zhukata_bot.keyboards.reply import get_keyboard
 
@@ -13,11 +15,9 @@ admin_router.message.filter(ChatTypeFilter(["private"]), IsAdmin())
 
 ADMIN_KB = get_keyboard(
     "Добавить задачу",
-    "Изменить задачу",
-    "Удалить задачу",
-    "Я так, просто посмотреть зашел",
+    "Список задач",
     placeholder="Выберите действие",
-    sizes=(2, 1, 1),
+    sizes=(2,),
 )
 
 
@@ -26,19 +26,21 @@ async def admin_features(message: types.Message):
     await message.answer("Что хотите сделать?", reply_markup=ADMIN_KB)
 
 
-@admin_router.message(F.text == "Я так, просто посмотреть зашел")
-async def starring_at_Task(message: types.Message):
-    await message.answer("ОК, вот список задач")
-
-
-@admin_router.message(F.text == "Изменить задачу")
-async def change_Task(message: types.Message):
-    await message.answer("ОК, вот список задач")
-
-
-@admin_router.message(F.text == "Удалить задачу")
-async def delete_Task(message: types.Message):
-    await message.answer("Выберите задачу(и) для удаления")
+@admin_router.message(F.text == "Список задач")
+async def starring_at_product(message: types.Message, session: AsyncSession):
+    for product in await orm_get_products(session):
+        await message.answer_photo(
+            product.image,
+            caption=f"<strong>{product.name}\
+                    </strong>\n{product.description}\nСтоимость: {round(product.price, 2)}",
+            # reply_markup=get_callback_btns(
+            #     btns={
+            #         "Удалить": f"delete_{product.id}",
+            #         "Изменить": f"change_{product.id}",
+            #     }
+            # ),
+        )
+    await message.answer("ОК, вот список товаров ⏫")
 
 
 #Код ниже для машины состояний (FSM)
@@ -124,9 +126,14 @@ async def add_price(message: types.Message, state: FSMContext):
 
 
 @admin_router.message(AddTask.image, F.photo)
-async def add_image(message: types.Message, state: FSMContext):
+async def add_image(message: types.Message, state: FSMContext, session: AsyncSession):
     await state.update_data(image=message.photo[-1].file_id)
-    await message.answer("задача добавлена", reply_markup=ADMIN_KB)
     data = await state.get_data()
-    await message.answer(str(data))
-    await state.clear()
+    try:
+        await orm_add_product(session, data)
+        await message.answer("задача добавлена", reply_markup=ADMIN_KB)
+        await state.clear()
+
+    except:
+        await message.answer(f"Error")
+        await state.clear()
