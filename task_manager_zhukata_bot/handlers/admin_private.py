@@ -4,13 +4,14 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from task_manager_zhukata_bot.database.orm_query import orm_add_product, orm_get_products
+from task_manager_zhukata_bot.database.orm_query import orm_add_product, orm_delete_product, orm_get_product, orm_get_products
 from task_manager_zhukata_bot.filters.chat_types import ChatTypeFilter, IsAdmin
+from task_manager_zhukata_bot.keyboards.inline import get_callback_btns
 from task_manager_zhukata_bot.keyboards.reply import get_keyboard
 
 
 admin_router = Router()
-admin_router.message.filter(ChatTypeFilter(["private"]), IsAdmin())
+admin_router.message.filter(ChatTypeFilter(["private"]))
 
 
 ADMIN_KB = get_keyboard(
@@ -20,6 +21,20 @@ ADMIN_KB = get_keyboard(
     sizes=(2,),
 )
 
+class AddTask(StatesGroup):
+    name = State()
+    description = State()
+    price = State()
+    image = State()
+
+    product_for_change = None
+
+    texts = {
+        'AddTask:name': 'Введите название заново:',
+        'AddTask:description': 'Введите описание заново:',
+        'AddTask:price': 'Введите стоимость заново:',
+        'AddTask:image': 'Этот стейт последний, поэтому...',
+    }
 
 @admin_router.message(Command("admin"))
 async def admin_features(message: types.Message):
@@ -33,30 +48,41 @@ async def starring_at_product(message: types.Message, session: AsyncSession):
             product.image,
             caption=f"<strong>{product.name}\
                     </strong>\n{product.description}\nСтоимость: {round(product.price, 2)}",
-            # reply_markup=get_callback_btns(
-            #     btns={
-            #         "Удалить": f"delete_{product.id}",
-            #         "Изменить": f"change_{product.id}",
-            #     }
-            # ),
+            reply_markup=get_callback_btns(
+                btns={
+                    "Удалить": f"delete_{product.id}",
+                    "Изменить": f"change_{product.id}",
+                }
+            ),
         )
     await message.answer("ОК, вот список товаров ⏫")
 
 
+@admin_router.callback_query(F.data.startswith('delete_'))
+async def delete_product(callback: types.CallbackQuery, session: AsyncSession):
+    
+    product_id = callback.data.split("_")[-1]
+    await orm_delete_product(session, int(product_id))
+    
+    await callback.answer("Товар удален")
+    await callback.message.answer("Товар удален")
+
 #Код ниже для машины состояний (FSM)
 
-class AddTask(StatesGroup):
-    name = State()
-    description = State()
-    price = State()
-    image = State()
+@admin_router.callback_query(StateFilter(None), F.data.startswith('change_'))
+async def change_product_callback(
+    callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
+    product_id = callback.data.split("_")[-1]
 
-    texts = {
-        'AddTask:name': 'Введите название заново:',
-        'AddTask:description': 'Введите описание заново:',
-        'AddTask:price': 'Введите стоимость заново:',
-        'AddTask:image': 'Этот стейт последний, поэтому...',
-    }
+    product_for_change = await orm_get_product(session, int(product_id))
+
+    AddTask.product_for_change = product_for_change
+
+    await callback.answer()
+    await callback.message.answer(
+        "Введите название задачи", reply_markup=types.ReplyKeyboardRemove()
+    )
+    await state.set_state(AddTask.name)
 
 
 @admin_router.message(StateFilter(None), F.text == "Добавить задачу")
